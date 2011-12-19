@@ -1,0 +1,8 @@
+PB0: up
+PB1: down
+PB2: left
+PD7: right
+PD6: enter
+PD5: radio/mp3 toggle
+PC4:
+PC5: 

@@ -19,6 +19,7 @@
 // Includes
 
 #include <avr/io.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
 #include <string.h>
 #include <stdio.h>
@@ -34,56 +35,107 @@
 
 // Function prototypes
 
-void inituart(void);
+void inituart(void);                                                                                                           
 void ioinit(void);
 void uart_putchar(unsigned char data);
 unsigned char uart_getchar(void);
 void uart_flush(void);
 void getline(unsigned char *serbuffer);
+void putstring(unsigned char *buffer);
+void init_timer1(void);
 
-enum Tags { Artist, Title, PlaylistLength, Song, Time };
+//enum Tags { Artist, Title, PlaylistLength, Song, Time };
+
+unsigned char serbuffer[SER_BUFF_LEN];	// serial buffer
+
+
+int buttonPressSeen;
+
+// Timer1 overflow interrupt service routine (ISR)
+SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interrupt
+{
+	TCNT1 = 0x10000 - (F_CPU/1024/8);	// reset timer
+
+
+	if(buttonPressSeen == 0)
+	{
+		PORTC = 0b0010000;
+		_delay_ms(10);
+		PORTC = 0x00;
+		if(!(PINB & 2))
+		{
+			buttonPressSeen = 1;
+			sprintf(serbuffer, "next\n");	// convert ADC value to string
+			putstring(serbuffer);	// transmit over serial link
+		}
+	}
+	else
+	{
+		PORTC = 0b0001000;
+		_delay_ms(10);
+		PORTC = 0x00;
+		if((PINB & 2))
+		{
+			buttonPressSeen = 0;
+		}
+		
+	}
+}
+
 
 int main(void)
 {
-	unsigned char serbuffer[SER_BUFF_LEN];	// serial buffer
 	unsigned char name[SER_BUFF_LEN];		// name of current radio station
 	unsigned char title[SER_BUFF_LEN];		// artist & title of current song
-
+	unsigned char RXserbuffer[SER_BUFF_LEN];	// serial buffer
+	\
 	/* initialization routines */
 	
     ioinit();		// Setup IO pins and defaults
     inituart();		// initialize AVR serial port (USART0)
+	buttonPressSeen = 0;
+
+	PORTC = 0b0001000;
+	_delay_ms(100);
+	PORTC = 0b0010000;
+	_delay_ms(100);
+	PORTC = 0b0100000;
+	_delay_ms(100);
 	PORTC = 0x00;   // All LED's are off
     
+	init_timer1();
+	sei();		// enable interrupts
+    
     /* main program loop */    
-    for(;;) // loop forever
+    while(1) // loop forever
 	{	
 		
-		// Start loop indicator
-		PORTC = 0b0111000;
+		// Grab name and title data from the router
+		// Note: program execution will stall until serial data is received!
+		getline(RXserbuffer);		// grab a line of data from the serial port
+
+		// Read line from serial port
+		PORTC = 0b0100000;
 		_delay_ms(10);
 		PORTC = 0b0000000;
 
-		// Grab name and title data from the router
-		// Note: program execution will stall until serial data is received!
-		getline(serbuffer);		// grab a line of data from the serial port
-
-		Tags received = processMessage(serbuffer);
+		//Tags received = processMessage(serbuffer);
 		
 		// decide what to do with the data
-		if (strstr(serbuffer, "song: "))
-			strcpy(name, serbuffer+(sizeof("song: ")-1));
+		if (strstr(RXserbuffer, "song: "))
+			strcpy(name, RXserbuffer+(sizeof("song: ")-1));
 		
 		// Blink the lights "tracknum" times
-		 int tracknum = atoi(name);
-		 for(int i=0; i<tracknum; i++)
-		 {
-			PORTC = 0b0100000;
-			_delay_ms(50);
-			PORTC = 0x00;
-			_delay_ms(300);
-			 
-		 }
+		int tracknum = atoi(name);
+		for(int i=0; i<tracknum; i++)
+		{
+	//		PORTC = 0b0100000;
+	//		_delay_ms(50);
+	//		PORTC = 0x00;
+	//		_delay_ms(300);
+		 
+		}
+		//_delay_ms(1000);
     }
 	 
     return 0;   /* never reached */
@@ -103,10 +155,18 @@ void inituart(void)	// Initialize USART0 to desired baud rate
 unsigned char uart_getchar(void)
 {
 	while(!(UCSR0A & (1 << RXC0)))	// wait until character is received
-	{
-	}
+		;	// do nothing
 	
 	return UDR0;
+}
+
+void uart_putchar(unsigned char data)	// send a character over the serial port
+{
+
+	while(!(UCSR0A & (1 << UDRE0))) // wait until UART is ready for tx
+		;       // do nothing
+	UDR0 = data;    // send char
+
 }
 
 void uart_flush(void)	// flush RX buffer
@@ -139,4 +199,40 @@ void ioinit (void)
 {
     //1 = output, 0 = input
     DDRC = 0b11111111; //All outputs
+
+    DDRB &= 0b11111101; // B1 is input
+	PORTB |= 0b00000010; // Enable internal pull-up resistor for B1
+}
+
+void putstring(unsigned char *buffer)	// send a string to the UART
+{
+	int bufpos = 0;
+	
+	cli();	// disable interrupts so we don't mangle the data
+	//uart_flush();	// clear RX buffer of stale chars if present
+	
+	// start sending characters over the serial port until we reach the end of the string
+	while ((bufpos < (SER_BUFF_LEN - 1)) && (buffer[bufpos] != '\0')) 
+	{
+		uart_putchar(buffer[bufpos]);
+			
+		bufpos++;
+	}
+	
+	//uart_putchar('\n');
+	sei();	// enable interrupts again
+	
+}
+
+void init_timer1(void) 
+{
+	// initialize TIMER1 to trigger an overflow interrupt every 0.5sec
+	TCCR1A = 0;
+	TCCR1B |= (1 << CS12) | (1 << CS10);
+
+	
+	TCNT1 = 0x10000 - (F_CPU/1024/8);
+	
+	TIFR1=0;
+	TIMSK1 |= (1 << TOIE1);
 }
