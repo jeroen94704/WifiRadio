@@ -18,13 +18,11 @@
 
 // Defines
 
-#define	SER_BUFF_LEN	150		// longest character line to accept from serial port
+#define	SER_BUFF_LEN	200		// longest character line to accept from serial port
 #define STR_LEN			21		// Longest substring (artist, trackname) to accept. Width of the display + terminating 0
 #define	BAUD			9600	// USART baud rate, must agree with router ttyS0 settings
 #define	LCD_WIDTH		20		// visible width of LCD display
-#define DDRAM_WIDTH		40		// internal line length of LCD display
 #define	PAGEDELAY		3000	// delay between LCD pages, in ms
-#define SHIFTDELAY		300		// horizontal shift rate of LCD when display > visible area
 
 // Function prototypes
 int atoi ( const char * str );
@@ -45,26 +43,23 @@ void displayProgressBar(int songLength, int songElapsed);
 void displayTrackInfo(char *trackName, char *artistName);
 
 char serRXbuffer[SER_BUFF_LEN];	// serial buffer
-char serTXbuffer[SER_BUFF_LEN];	// serial buffer
+char serTXbuffer[20];	// serial buffer
 
 
-int buttonPressSeen;
+int button1PressSeen;
+int button2PressSeen;
 
 // Timer1 overflow interrupt service routine (ISR)
 SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interrupt
 {
 	TCNT1 = 0x10000 - (F_CPU/1024/4);	// reset timer
 
-	PORTC = 0b0100000;
-	_delay_ms(10);
-	PORTC = 0x00;   // All LED's are off
-
-	if(buttonPressSeen == 0)
+	if(button1PressSeen == 0)
 	{
 		if(!(PINB & 2))
 		{
-			buttonPressSeen = 1;
-			sprintf(serTXbuffer, "next\n");	// convert ADC value to string
+			button1PressSeen = 1;
+			sprintf(serTXbuffer, "cmd:next\n");	// convert ADC value to string
 			putstring(serTXbuffer);	// transmit over serial link
 		}
 	}
@@ -72,7 +67,25 @@ SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interr
 	{
 		if((PINB & 2))
 		{
-			buttonPressSeen = 0;
+			button1PressSeen = 0;
+		}
+		
+	}
+
+	if(button2PressSeen == 0)
+	{
+		if(!(PINB & 1))
+		{
+			button2PressSeen = 1;
+			sprintf(serTXbuffer, "cmd:reload\n");	// convert ADC value to string
+			putstring(serTXbuffer);	// transmit over serial link
+		}
+	}
+	else
+	{
+		if((PINB & 1))
+		{
+			button2PressSeen = 0;
 		}
 		
 	}
@@ -103,7 +116,8 @@ int main(void)
     lcd_puts("    MPD Boombox\n   Jeroen Bouwens\n\n Sponsored by Sioux");
     _delay_ms(2000);
 	
-	buttonPressSeen = 0;
+	button1PressSeen = 0;
+	button2PressSeen = 0;
 	init_timer1();
 	sei();		// enable interrupts
     
@@ -183,8 +197,8 @@ void ioinit (void)
 {
     //1 = output, 0 = input
     DDRC |= 0b0100000; // PC5 is output
-	DDRB &= 0b11111101; // PB1 is input
-	PORTB |= 0b00000010; // Enable internal pull-up resistor	
+	DDRB &= 0b11111100; // PB0 and 1 are input
+	PORTB |= 0b00000011; // Enable internal pull-up resistor	
 }
 
 void putstring(char *buffer)	// send a string to the UART
@@ -224,35 +238,67 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 						int *playlistLength, int *songNum, int *songTime, int *songElapsed)
 {
 	char *artistPtr 	= strstr(RXserbuffer, "Artist: ");
-	char *titlePtr 	= strstr(RXserbuffer, "Title: ");
+	char *titlePtr 		= strstr(RXserbuffer, "Title: ");
+	char *namePtr		= strstr(RXserbuffer, "Name: ");
 	char *plLengthPtr	= strstr(RXserbuffer, "playlistlength: ");
 	char *songPtr 		= strstr(RXserbuffer, "song: ");
 	char *timePtr 		= strstr(RXserbuffer, "time: ");
 	
-	if(artistPtr && titlePtr && plLengthPtr && songPtr && timePtr)
+	int stringLength = 0;
+	if(artistPtr && titlePtr)
 	{
 		char *artistStart = artistPtr + sizeof("Artist: ") - 1;
-		int artistLength = titlePtr - (artistPtr + sizeof("Artist: ") - 1);
-		artistLength = artistLength > 20 ? 20 : artistLength;
-		strncpy(artist, artistStart , artistLength);
-		artist[artistLength] = '\0';
+		stringLength = titlePtr - (artistPtr + sizeof("Artist: ") - 1);
+		stringLength = stringLength > 20 ? 20 : stringLength;
+		strncpy(artist, artistStart , stringLength);
+	}
+	artist[stringLength] = '\0';
 	
+	stringLength = 0;
+	if(titlePtr && namePtr) // If we're playing a stream the "artist" field will not be present and there will be a "name" field between title and playlistlength
+	{
 		char *titleStart = titlePtr + sizeof("Title: ") - 1;
-		int titleLength = plLengthPtr - (titlePtr + sizeof("Title: ") - 1);
-		titleLength = titleLength > 20 ? 20 : titleLength;
-		strncpy(title, titleStart, titleLength);
-		title[titleLength] = '\0';
-
+		stringLength = namePtr - (titlePtr + sizeof("Title: ") - 1);
+		stringLength = stringLength > 20 ? 20 : stringLength;
+		strncpy(title, titleStart, stringLength);		
+	}
+	else if(titlePtr && plLengthPtr) // There's no "name" field, so there will be a playlistlength field after the title
+	{
+		char *titleStart = titlePtr + sizeof("Title: ") - 1;
+		stringLength = plLengthPtr - (titlePtr + sizeof("Title: ") - 1);
+		stringLength = stringLength > 20 ? 20 : stringLength;
+		strncpy(title, titleStart, stringLength);
+		
+	}
+	title[stringLength] = '\0';
+	
+	if(namePtr && plLengthPtr)
+	{
+		char *nameStart = namePtr + sizeof("Name: ") - 1;
+		stringLength = plLengthPtr - (namePtr + sizeof("Name: ") - 1);
+		stringLength = stringLength > 20 ? 20 : stringLength;
+		strncpy(artist, nameStart , stringLength);
+		artist[stringLength] = '\0';
+	}
+	
+	if(plLengthPtr && songPtr)
+	{
 		char *pllStart = plLengthPtr + sizeof("playlistlength: ") - 1;
-		int pllLength = songPtr - (plLengthPtr + sizeof("playlistlength: ") - 1);
-		pllStart[pllLength] = '\0';
+		stringLength = songPtr - (plLengthPtr + sizeof("playlistlength: ") - 1);
+		pllStart[stringLength] = '\0';
 		*playlistLength = atoi(pllStart);
-
+	}
+	
+	if(songPtr && timePtr)
+	{
 		char *songStart = songPtr + sizeof("song: ") - 1;
-		int songLength = timePtr - (songPtr + sizeof("song: ") - 1);
-		songStart[songLength] = '\0';
+		stringLength = timePtr - (songPtr + sizeof("song: ") - 1);
+		songStart[stringLength] = '\0';
 		*songNum = atoi(songStart) + 1;
-
+	}
+	
+	if(timePtr)
+	{
 		char *timeStart = timePtr + sizeof("time: ") - 1;
 		char *songTotalTime = strstr(timeStart, ":") + 1;
 		*(songTotalTime-1) = '\0'; // Insert a terminating \0 to separate the elapsed time from the total time
@@ -264,39 +310,36 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 void displayTrackInfo(char *trackName, char *artistName)
 {
 
-	if(strlen(artistName) > 20)
-	{
-		artistName[17]='.';
-		artistName[18]='.';
-		artistName[19]='.';
-		artistName[20]='\0';
-	}
 	lcd_gotoxy(10-strlen(artistName)/2,1);
 	lcd_puts(artistName);
 
-	if(strlen(trackName) > 20)
-	{
-		trackName[17]='.';
-		trackName[18]='.';
-		trackName[19]='.';
-		trackName[20]='\0';
-	}
 	lcd_gotoxy(10-strlen(trackName)/2,2);
 	lcd_puts(trackName);
 } 
 
 void displayProgressBar(int songLength, int songElapsed)
 {
-	for(int i=0; i<((songElapsed*100)/songLength)/5; i++)
+	if(songLength > 0)
 	{
-		lcd_gotoxy(i, 3);
-		lcd_putc('#');
-	}
+		for(int i=0; i<((songElapsed*100)/songLength)/5; i++)
+		{
+			lcd_gotoxy(i, 3);
+			lcd_putc('#');
+		}
 
-	for(int i=((songElapsed*100)/songLength)/5; i<20; i++)
+		for(int i=((songElapsed*100)/songLength)/5; i<20; i++)
+		{
+			lcd_gotoxy(i, 3);
+			lcd_putc('-');
+		}
+	}
+	else
 	{
-		lcd_gotoxy(i, 3);
-		lcd_putc('-');
+		for(int i=0; i<20; i++)
+		{
+			lcd_gotoxy(i, 3);
+			lcd_putc('-');
+		}		
 	}
 }
 
