@@ -48,14 +48,14 @@ AVRDUDEMCU = m328p
 #     processor frequency. You can then use this symbol in your source code to 
 #     calculate timings. Do NOT tack on a 'UL' at the end, this will be done
 #     automatically to create a 32-bit value in your source code.
-F_CPU = 8000000
+F_CPU = 16000000
 
 
 # Output format. (can be srec, ihex, binary)
 FORMAT = ihex
 
-FUSES      = -U lfuse:w:0xe2:m -U hfuse:w:0xd9:m
-
+#FUSES      = -U lfuse:w:0xe2:m -U hfuse:w:0xd9:m
+FUSES      = -U hfuse:w:0xDF:m -U lfuse:w:0xC7:m
 # Target file name (without extension).
 TARGET = main
 
@@ -327,7 +327,8 @@ eep: $(TARGET).eep
 lss: $(TARGET).lss 
 sym: $(TARGET).sym
 
-
+fuse:
+	$(AVRDUDE) $(AVRDUDE_FLAGS) $(FUSES)
 
 # Eye candy.
 # AVR Studio 3.x does not check make's exit code but relies on

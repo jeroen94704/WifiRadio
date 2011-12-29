@@ -24,6 +24,10 @@
 #define	LCD_WIDTH		20		// visible width of LCD display
 #define	PAGEDELAY		3000	// delay between LCD pages, in ms
 
+#define BOOL unsigned char
+#define TRUE 1
+#define FALSE 0
+
 // Function prototypes
 int atoi ( const char * str );
 
@@ -41,56 +45,116 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title, int *playl
 void displayTime(int songElapsed, int playlistLength, int songNum);
 void displayProgressBar(int songLength, int songElapsed);
 void displayTrackInfo(char *trackName, char *artistName);
+BOOL processButtonPress(int buttonIndex, int buttonPin);
+void sendCommand(char* command);
 
 char serRXbuffer[SER_BUFF_LEN];	// serial buffer
 char serTXbuffer[20];	// serial buffer
 
+#define UPBUTTON 0
+#define DOWNBUTTON 1
+#define LEFTBUTTON 2
+#define RIGHTBUTTON 3
+#define ENTERBUTTON 4
+#define SWITCHBUTTON 5
 
-int button1PressSeen;
-int button2PressSeen;
+#define UPBUTTONPIN PINB&1
+#define DOWNBUTTONPIN PINB&2
+#define LEFTBUTTONPIN PINB&4
+#define RIGHTBUTTONPIN PIND&128
+#define ENTERBUTTONPIN PIND&64
+#define SWITCHBUTTONPIN PIND&32
+
+#define PM_PLAYINGMP3 0
+#define PM_PLAYINGRADIO 1
+#define PM_BROWSING 2
+
+// Bits used to keep track of which button presses have been seen
+unsigned char buttonPressSeen;
+
+unsigned char playerMode;
+unsigned int currentListHilightedIndex;
+unsigned int currentListStartIndex;
 
 // Timer1 overflow interrupt service routine (ISR)
 SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interrupt
 {
-	TCNT1 = 0x10000 - (F_CPU/1024/4);	// reset timer
+	TCNT1 = 0x10000 - (F_CPU/1024/8);	// reset timer
 
-	if(button1PressSeen == 0)
+	if(playerMode == PM_PLAYINGRADIO)
 	{
-		if(!(PINB & 2))
+		if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
 		{
-			button1PressSeen = 1;
-			sprintf(serTXbuffer, "cmd:next\n");	// convert ADC value to string
-			putstring(serTXbuffer);	// transmit over serial link
+			sendCommand("cmd:next\n");  // Should be: volup
 		}
-	}
-	else
-	{
-		if((PINB & 2))
+		if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
 		{
-			button1PressSeen = 0;
+			sendCommand("cmd:loadstreams\n");  // Should be: voldown
 		}
-		
+	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
+	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
+		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
+		{
+			playerMode = PM_BROWSING;
+		}
 	}
 
-	if(button2PressSeen == 0)
+	if(playerMode == PM_PLAYINGMP3)
 	{
-		if(!(PINB & 1))
+//		processButtonPress(UPBUTTON, UPBUTTONPIN, "cmd:next\n"); // really: volup
+//		processButtonPress(DOWNBUTTON, DOWNBUTTONPIN, "cmd:loadstreams\n"); // really: voldown
+	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
+	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
+		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
 		{
-			button2PressSeen = 1;
-			sprintf(serTXbuffer, "cmd:reload\n");	// convert ADC value to string
-			putstring(serTXbuffer);	// transmit over serial link
+			playerMode = PM_PLAYINGRADIO;
+			sendCommand("cmd:loadstreams\n");
 		}
 	}
-	else
+	else if(playerMode == PM_BROWSING)
 	{
-		if((PINB & 1))
+//		if(processButtonPress(UPBUTTON, UPBUTTONPIN, "cmd:next\n"); // really: volup
+//		processButtonPress(DOWNBUTTON, DOWNBUTTONPIN, "cmd:loadstreams\n"); // really: voldown
+	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
+	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
+		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
 		{
-			button2PressSeen = 0;
+			playerMode = PM_PLAYINGRADIO;
+			sendCommand("cmd:loadstreams\n");
 		}
-		
 	}
+	
 }
 
+BOOL processButtonPress(int buttonIndex, int buttonPin)
+{
+	BOOL result = FALSE;
+	
+	if(!(buttonPressSeen & (1 << buttonIndex)))
+	{
+		if(!(buttonPin))
+		{
+			buttonPressSeen |=  (1 << buttonIndex);
+			result=TRUE;
+		}
+	}
+	else
+	{
+		if((buttonPin))
+		{
+			buttonPressSeen &=  !(1 << buttonIndex);
+		}
+		
+	}
+	
+	return result;
+}
+
+void sendCommand(char* command)
+{
+	sprintf(serTXbuffer, command);	// Place command in send buffer
+	putstring(serTXbuffer);	// transmit over serial link		
+}
 
 int main(void)
 {
@@ -113,11 +177,11 @@ int main(void)
 
     // Display splash screen
     lcd_clrscr();	
-    lcd_puts("    MPD Boombox\n   Jeroen Bouwens\n\n Sponsored by Sioux");
+    lcd_puts("    MPD Boombox\n   Jeroen Bouwens\n Sponsored by Sioux\n  Embedded Systems");
     _delay_ms(2000);
 	
-	button1PressSeen = 0;
-	button2PressSeen = 0;
+	buttonPressSeen = 0;
+	playerMode = 0;
 	init_timer1();
 	sei();		// enable interrupts
     
