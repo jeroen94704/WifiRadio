@@ -1,6 +1,13 @@
 /*
- * This code is based on the firmware made by Jeff Keyzer for his Wifi Radio project. More information is available at
+ * Firmware (c)2012 Jeroen Bouwens. Parts of the code were lifted from Jeff Keyzer's 
+ * code, and from the SparkFun turorial on beginning embedded electronics. 
+ * More information at:
+ *
  * http://mightyohm.com/blog/
+ *
+ * and 
+ *
+ * http://www.sparkfun.com/tutorials/93
  *
  * Built and tested with an ATmega368 @ 16MHz and a Sparkfun 20x4 character LCD display
  *
@@ -45,8 +52,11 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title, int *playl
 void displayTime(int songElapsed, int playlistLength, int songNum);
 void displayProgressBar(int songLength, int songElapsed);
 void displayTrackInfo(char *trackName, char *artistName);
+void displayLines(char lines[4][STR_LEN]);
 BOOL processButtonPress(int buttonIndex, int buttonPin);
+BOOL processResponse(char *RXserbuffer, char lines[4][STR_LEN]);
 void sendCommand(char* command);
+void sendCommandParams(char* cmd, int param1, int param2);
 
 char serRXbuffer[SER_BUFF_LEN];	// serial buffer
 char serTXbuffer[20];	// serial buffer
@@ -73,57 +83,161 @@ char serTXbuffer[20];	// serial buffer
 unsigned char buttonPressSeen;
 
 unsigned char playerMode;
-unsigned int currentListHilightedIndex;
-unsigned int currentListStartIndex;
+int currentListSelectedIndex;
+int currentListStartIndex;
+
+// Buffer holding track/dir names to display in browsing mode
+char lines[4][STR_LEN];
+
+BOOL waitingForReply;
+int timeOutCounter;
 
 // Timer1 overflow interrupt service routine (ISR)
 SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interrupt
 {
-	TCNT1 = 0x10000 - (F_CPU/1024/8);	// reset timer
-
-	if(playerMode == PM_PLAYINGRADIO)
+	TCNT1 = 0x10000 - (F_CPU/1024/10);	// reset timer
+	
+	if(waitingForReply && timeOutCounter < 100)
 	{
-		if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
-		{
-			sendCommand("cmd:next\n");  // Should be: volup
-		}
-		if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
-		{
-			sendCommand("cmd:loadstreams\n");  // Should be: voldown
-		}
-	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
-	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
-		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
-		{
-			playerMode = PM_BROWSING;
-		}
+		timeOutCounter++;
 	}
-
-	if(playerMode == PM_PLAYINGMP3)
+	else
 	{
-//		processButtonPress(UPBUTTON, UPBUTTONPIN, "cmd:next\n"); // really: volup
-//		processButtonPress(DOWNBUTTON, DOWNBUTTONPIN, "cmd:loadstreams\n"); // really: voldown
-	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
-	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
-		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
-		{
-			playerMode = PM_PLAYINGRADIO;
-			sendCommand("cmd:loadstreams\n");
-		}
-	}
-	else if(playerMode == PM_BROWSING)
-	{
-//		if(processButtonPress(UPBUTTON, UPBUTTONPIN, "cmd:next\n"); // really: volup
-//		processButtonPress(DOWNBUTTON, DOWNBUTTONPIN, "cmd:loadstreams\n"); // really: voldown
-	//	processButtonPress(LEFTBUTTON, LEFTBUTTONPIN, "cmd:prev\n");
-	//	processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN, "cmd:next\n");
-		if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
-		{
-			playerMode = PM_PLAYINGRADIO;
-			sendCommand("cmd:loadstreams\n");
-		}
+		// timeout occurred
+		waitingForReply = FALSE;
+		timeOutCounter=0;
 	}
 	
+	if(!waitingForReply)
+	{
+		if(playerMode == PM_PLAYINGRADIO)
+		{
+			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:volup\n");  
+			}
+			if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:voldown\n");
+			}
+			if(processButtonPress(LEFTBUTTON, LEFTBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:prev\n");
+			}
+			if(processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:next\n");
+			}
+			
+			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
+			{
+				playerMode = PM_BROWSING;
+
+				// Retrieve the first list of items to show
+				currentListStartIndex = 0;
+				currentListSelectedIndex = 0;
+				sendCommand("cmd:getfirsttracks\n");  
+				waitingForReply = TRUE;
+			}
+		}
+
+		if(playerMode == PM_PLAYINGMP3)
+		{
+			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:volup\n");  
+			}
+			if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:voldown\n");
+			}
+			if(processButtonPress(LEFTBUTTON, LEFTBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:prev\n");
+			}
+			if(processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:next\n");
+			}
+			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
+			{
+				playerMode = PM_PLAYINGRADIO;
+				sendCommand("cmd:loadstreams\n");
+			}
+		}
+		else if(playerMode == PM_BROWSING)
+		{
+			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
+			{
+				currentListSelectedIndex--;
+				if(currentListSelectedIndex == -1 && currentListStartIndex > 0)
+				{
+					currentListStartIndex -= 4;
+					if(currentListStartIndex < 0)
+					{
+						currentListStartIndex = 0;
+					}
+					currentListSelectedIndex = 3;
+					
+					// Retrieve the new list of items to show
+					sendCommandParams("gettracks", currentListStartIndex, currentListSelectedIndex);		
+					waitingForReply = TRUE;
+				}
+				else
+				{
+					displayLines(lines);
+				}
+			}
+				
+			if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
+			{
+				currentListSelectedIndex++;
+				if(currentListSelectedIndex == 4)
+				{
+					currentListStartIndex += 4;
+					currentListSelectedIndex = 0;
+					
+					// Retrieve the new list of items to show
+					sendCommandParams("gettracks", currentListStartIndex, currentListSelectedIndex);		
+					waitingForReply = TRUE;
+				}	
+				else
+				{
+					displayLines(lines);
+				}
+			}
+			if(processButtonPress(LEFTBUTTON, LEFTBUTTONPIN) == TRUE)
+			{
+				sendCommand("cmd:dirup\n");
+				currentListStartIndex = 0;
+				currentListSelectedIndex = 0;
+			}
+			if(processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN) == TRUE)
+			{
+				sendCommandParams("dirdown", currentListStartIndex, currentListSelectedIndex);		
+				currentListStartIndex = 0;
+				currentListSelectedIndex = 0;
+				waitingForReply = TRUE;
+			}
+			if(processButtonPress(ENTERBUTTON, ENTERBUTTONPIN) == TRUE)
+			{
+				sendCommandParams("play", currentListStartIndex, currentListSelectedIndex);		
+			}
+
+			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
+			{
+				playerMode = PM_PLAYINGRADIO;
+				sendCommand("cmd:loadstreams\n");
+			}
+		}
+	}
+}
+
+void sendCommandParams(char* cmd, int param1, int param2)
+{
+	char stringBuffer[40];
+	sprintf(stringBuffer, "cmd:%s %d %d\n", cmd, param1, param2);
+	sendCommand(stringBuffer);		
 }
 
 BOOL processButtonPress(int buttonIndex, int buttonPin)
@@ -181,7 +295,7 @@ int main(void)
     _delay_ms(2000);
 	
 	buttonPressSeen = 0;
-	playerMode = 0;
+	playerMode = PM_PLAYINGRADIO;
 	init_timer1();
 	sei();		// enable interrupts
     
@@ -190,14 +304,28 @@ int main(void)
 	{	
 		// Note: program execution will stall until serial data is received!
 		getline(serRXbuffer);		// grab a line of data from the serial port
-				
-		processPlayingLine(serRXbuffer, artist, title, &playlistLength, &songNum, &songTime, &songElapsed);
-				
-		lcd_clrscr();	// clear screen
 
-		displayTime(songElapsed, playlistLength, songNum);
-		displayProgressBar(songTime, songElapsed);
-		displayTrackInfo(title, artist);
+		PORTC |= 0b0100000;
+		_delay_ms(100);
+		PORTC &= 0b1011111;
+				
+		if(playerMode == PM_PLAYINGMP3 || playerMode == PM_PLAYINGRADIO)
+		{
+			processPlayingLine(serRXbuffer, artist, title, &playlistLength, &songNum, &songTime, &songElapsed);
+				
+			lcd_clrscr();	// clear screen
+
+			displayTime(songElapsed, playlistLength, songNum);
+			displayProgressBar(songTime, songElapsed);
+			displayTrackInfo(title, artist);
+		}
+		else
+		{
+			if(processResponse(serRXbuffer, lines) == TRUE)
+			{
+				displayLines(lines);
+			}
+		}
     }
 	 
     return 0;   /* never reached */
@@ -260,9 +388,13 @@ void getline(char *buffer)	// get a single line from the UART rcvr
 void ioinit (void)
 {
     //1 = output, 0 = input
-    DDRC |= 0b0100000; // PC5 is output
-	DDRB &= 0b11111100; // PB0 and 1 are input
-	PORTB |= 0b00000011; // Enable internal pull-up resistor	
+    DDRC  |= 0b0100000; // PC5 is output
+	
+	DDRB  &= 0b11111000; // PB0, 1, 2 are input
+	PORTB |= 0b00000111; // Enable internal pull-up resistors	
+
+	DDRD  &= 0b00011111; // PB5, 6, 7 are input
+	PORTD |= 0b11100000; // Enable internal pull-up resistors
 }
 
 void putstring(char *buffer)	// send a string to the UART
@@ -298,6 +430,37 @@ void init_timer1(void)
 	TIMSK1 |= (1 << TOIE1);
 }
 
+BOOL processResponse(char *RXserbuffer, char lines[4][STR_LEN])
+{
+	char *responsePtr		= strstr(RXserbuffer, "resp: ");
+
+	if(responsePtr)
+	{
+		char *respStart = responsePtr + sizeof("resp: ") - 1;
+		char *commaPtr = strstr(respStart, ",");
+		for(int i=0; i<4; i++)
+		{
+			if(commaPtr)
+			{
+				int strLen = commaPtr - respStart;
+				strncpy(lines[i], respStart , strLen);
+				lines[i][strLen] = '\0';	
+				respStart = commaPtr+1;
+				commaPtr = strstr(respStart, ",");
+			}
+			else
+			{
+				lines[i][0] = '\0';					
+			}
+		}		
+		waitingForReply = FALSE;
+		return TRUE;
+	}
+	
+	return FALSE;
+}
+
+
 void processPlayingLine(char *RXserbuffer, char *artist, char *title, 
 						int *playlistLength, int *songNum, int *songTime, int *songElapsed)
 {
@@ -307,8 +470,9 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 	char *plLengthPtr	= strstr(RXserbuffer, "playlistlength: ");
 	char *songPtr 		= strstr(RXserbuffer, "song: ");
 	char *timePtr 		= strstr(RXserbuffer, "time: ");
-	
-	int stringLength = 0;
+
+	int stringLength = 0;	
+
 	if(artistPtr && titlePtr)
 	{
 		char *artistStart = artistPtr + sizeof("Artist: ") - 1;
@@ -368,7 +532,7 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 		*(songTotalTime-1) = '\0'; // Insert a terminating \0 to separate the elapsed time from the total time
 		*songElapsed = atoi(timeStart);
 		*songTime = atoi(songTotalTime);
-	}
+	}	
 }
 
 void displayTrackInfo(char *trackName, char *artistName)
@@ -418,4 +582,21 @@ void displayTime(int songElapsed, int playlistLength, int songNum)
 	sprintf(stringBuffer, "(%d of %d)", songNum, playlistLength);
 	lcd_gotoxy(20-strlen(stringBuffer), 0);
 	lcd_puts(stringBuffer);
+}
+
+void displayLines(char lines[4][STR_LEN])
+{
+	lcd_clrscr();
+			
+	for(int y=0; y<4; y++)
+	{
+		lcd_gotoxy(1, y);
+		lcd_puts(lines[y]);
+		
+		if(y == currentListSelectedIndex)
+		{
+			lcd_gotoxy(0, y);
+			lcd_puts(">");
+		}
+	}
 }
