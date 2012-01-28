@@ -13,7 +13,7 @@
  *
  */
 
-// Includes
+//=========== Includes ===========
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -23,7 +23,7 @@
 
 #include "lcd.h"				// Peter Fleury's LCD Library
 
-// Defines
+//=========== Defines ===========
 
 #define	SER_BUFF_LEN	200		// longest character line to accept from serial port
 #define STR_LEN			21		// Longest substring (artist, trackname) to accept. Width of the display + terminating 0
@@ -35,7 +35,25 @@
 #define TRUE 1
 #define FALSE 0
 
-// Function prototypes
+#define UPBUTTON 0
+#define DOWNBUTTON 1
+#define LEFTBUTTON 2
+#define RIGHTBUTTON 3
+#define ENTERBUTTON 4
+#define SWITCHBUTTON 5
+
+#define UPBUTTONPIN PINB&1
+#define DOWNBUTTONPIN PINB&2
+#define LEFTBUTTONPIN PINB&4
+#define RIGHTBUTTONPIN PIND&128
+#define ENTERBUTTONPIN PIND&64
+#define SWITCHBUTTONPIN PIND&32
+
+#define PM_PLAYING 0
+#define PM_BROWSING 2
+
+//=========== Function prototypes ===========
+
 int atoi ( const char * str );
 
 void inituart(void);
@@ -52,65 +70,50 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title, int *playl
 void displayTime(int songElapsed, int playlistLength, int songNum);
 void displayProgressBar(int songLength, int songElapsed);
 void displayTrackInfo(char *trackName, char *artistName);
-void displayLines(char lines[4][STR_LEN]);
+void displayDirEntries(void);
 BOOL processButtonPress(int buttonIndex, int buttonPin);
-BOOL processResponse(char *RXserbuffer, char lines[4][STR_LEN]);
+BOOL processResponse(char *RXserbuffer);
 void sendCommand(char* command);
 void sendCommandParams(char* cmd, int param1, int param2);
 
 char serRXbuffer[SER_BUFF_LEN];	// serial buffer
 char serTXbuffer[20];	// serial buffer
 
-#define UPBUTTON 0
-#define DOWNBUTTON 1
-#define LEFTBUTTON 2
-#define RIGHTBUTTON 3
-#define ENTERBUTTON 4
-#define SWITCHBUTTON 5
 
-#define UPBUTTONPIN PINB&1
-#define DOWNBUTTONPIN PINB&2
-#define LEFTBUTTONPIN PINB&4
-#define RIGHTBUTTONPIN PIND&128
-#define ENTERBUTTONPIN PIND&64
-#define SWITCHBUTTONPIN PIND&32
+//=========== Global Variables ===========
 
-#define PM_PLAYINGMP3 0
-#define PM_PLAYINGRADIO 1
-#define PM_BROWSING 2
-
-// Bits used to keep track of which button presses have been seen
-unsigned char buttonPressSeen;
-
-unsigned char playerMode;
-int currentListSelectedIndex;
-int currentListStartIndex;
-
-// Buffer holding track/dir names to display in browsing mode
-char lines[4][STR_LEN];
-
-BOOL waitingForReply;
-int timeOutCounter;
+unsigned char gButtonPressSeen;	// Bits used to keep track of which button presses have been seen
+unsigned char gPlayerMode;		// Keep track whether we are playing something or browsing the collection
+int gCurrentListSelectedIndex;	// The selected item in the sublist of 4 currently shown on the display
+int gCurrentListStartIndex;		// The index in the total list of the first item in the current sublist of 4
+char gDirEntries[4][STR_LEN];	// Buffer holding track/dir names to display in browsing mode
+int gNumDirEntries;				// How many dir entries did I receive? (should always be 1,2,3 or 4)
+BOOL gWaitingForReply;			// Indicates whether a request was sent to which a reply is expected but not yet received
+int gTimeOutCounter;			// Counter for the response timeout mechanism (in case the router fails to respond)
 
 // Timer1 overflow interrupt service routine (ISR)
 SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interrupt
 {
-	TCNT1 = 0x10000 - (F_CPU/1024/10);	// reset timer
+	TCNT1 = 0x10000 - (F_CPU/1024/10);	// Reset the timer
 	
-	if(waitingForReply && timeOutCounter < 100)
+	// Timeout mechanism, just in case the router fails to respond to a button press for 
+	// which I expect a reply
+	if(gWaitingForReply && gTimeOutCounter < 20)
 	{
-		timeOutCounter++;
+		gTimeOutCounter++;
 	}
 	else
 	{
-		// timeout occurred
-		waitingForReply = FALSE;
-		timeOutCounter=0;
+		// Timeout occurred
+		gWaitingForReply = FALSE;
+		gTimeOutCounter=0;
 	}
 	
-	if(!waitingForReply)
+	// Don't process button presses while I am are waiting for a reply
+	if(!gWaitingForReply)
 	{
-		if(playerMode == PM_PLAYINGRADIO)
+		// When I am playing, handle button presses accordingly
+		if(gPlayerMode == PM_PLAYING)
 		{
 			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
 			{
@@ -128,111 +131,107 @@ SIGNAL (TIMER1_OVF_vect) // SIGNAL call makes sure we don't interrupt the interr
 			{
 				sendCommand("cmd:next\n");
 			}
-			
 			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
 			{
-				playerMode = PM_BROWSING;
+				gPlayerMode = PM_BROWSING;
 
 				// Retrieve the first list of items to show
-				currentListStartIndex = 0;
-				currentListSelectedIndex = 0;
+				gCurrentListStartIndex = 0;
+				gCurrentListSelectedIndex = 0;
 				sendCommand("cmd:getfirsttracks\n");  
-				waitingForReply = TRUE;
+				gWaitingForReply = TRUE;
 			}
 		}
-
-		if(playerMode == PM_PLAYINGMP3)
+		// When I am browsing, handle button presses accordingly
+		else if(gPlayerMode == PM_BROWSING)
 		{
 			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
 			{
-				sendCommand("cmd:volup\n");  
-			}
-			if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
-			{
-				sendCommand("cmd:voldown\n");
-			}
-			if(processButtonPress(LEFTBUTTON, LEFTBUTTONPIN) == TRUE)
-			{
-				sendCommand("cmd:prev\n");
-			}
-			if(processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN) == TRUE)
-			{
-				sendCommand("cmd:next\n");
-			}
-			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
-			{
-				playerMode = PM_PLAYINGRADIO;
-				sendCommand("cmd:loadstreams\n");
-			}
-		}
-		else if(playerMode == PM_BROWSING)
-		{
-			if(processButtonPress(UPBUTTON, UPBUTTONPIN) == TRUE)
-			{
-				currentListSelectedIndex--;
-				if(currentListSelectedIndex == -1 && currentListStartIndex > 0)
+				// Move up in the current sublist of 4 until I hit the top.
+				gCurrentListSelectedIndex--;
+				if(gCurrentListSelectedIndex == -1 && gCurrentListStartIndex > 0)
 				{
-					currentListStartIndex -= 4;
-					if(currentListStartIndex < 0)
+					// Move up 4 places in the total list, if this is still possible
+					gCurrentListStartIndex -= 4;
+					if(gCurrentListStartIndex < 0)
 					{
-						currentListStartIndex = 0;
+						gCurrentListStartIndex = 0;
 					}
-					currentListSelectedIndex = 3;
+					
+					// Switching to the "previous" page, so set the bottom entry as selected
+					gCurrentListSelectedIndex = 3;
 					
 					// Retrieve the new list of items to show
-					sendCommandParams("gettracks", currentListStartIndex, currentListSelectedIndex);		
-					waitingForReply = TRUE;
+					sendCommandParams("gettracks", gCurrentListStartIndex, gCurrentListSelectedIndex);		
+					gWaitingForReply = TRUE;
 				}
 				else
 				{
-					displayLines(lines);
+					displayDirEntries();
 				}
 			}
 				
 			if(processButtonPress(DOWNBUTTON, DOWNBUTTONPIN) == TRUE)
 			{
-				currentListSelectedIndex++;
-				if(currentListSelectedIndex == 4)
+				// Move down in the current sublist of 4 until I hit the bottom.
+				gCurrentListSelectedIndex++;
+				
+				if(gCurrentListSelectedIndex == 4)
 				{
-					currentListStartIndex += 4;
-					currentListSelectedIndex = 0;
+					// Move down 4 places in the total list
+					gCurrentListStartIndex += 4;
+					
+					// Switching to the "next" page, so set the top entry as selected
+					gCurrentListSelectedIndex = 0;
 					
 					// Retrieve the new list of items to show
-					sendCommandParams("gettracks", currentListStartIndex, currentListSelectedIndex);		
-					waitingForReply = TRUE;
+					sendCommandParams("gettracks", gCurrentListStartIndex, gCurrentListSelectedIndex);		
+					gWaitingForReply = TRUE;
 				}	
 				else
 				{
-					displayLines(lines);
+					// In case of a sublist shorter than 4 items, make sure I don't go past the last item
+					if(gCurrentListSelectedIndex >= gNumDirEntries)
+					{
+						gCurrentListSelectedIndex = gNumDirEntries - 1;
+					}
+
+					displayDirEntries();
 				}
 			}
+			
 			if(processButtonPress(LEFTBUTTON, LEFTBUTTONPIN) == TRUE)
 			{
 				sendCommand("cmd:dirup\n");
-				currentListStartIndex = 0;
-				currentListSelectedIndex = 0;
+				gCurrentListStartIndex = 0;
+				gCurrentListSelectedIndex = 0;
+				gWaitingForReply = TRUE;
 			}
+			
 			if(processButtonPress(RIGHTBUTTON, RIGHTBUTTONPIN) == TRUE)
 			{
-				sendCommandParams("dirdown", currentListStartIndex, currentListSelectedIndex);		
-				currentListStartIndex = 0;
-				currentListSelectedIndex = 0;
-				waitingForReply = TRUE;
+				sendCommandParams("dirdown", gCurrentListStartIndex, gCurrentListSelectedIndex);		
+				gCurrentListStartIndex = 0;
+				gCurrentListSelectedIndex = 0;
+				gWaitingForReply = TRUE;
 			}
+			
 			if(processButtonPress(ENTERBUTTON, ENTERBUTTONPIN) == TRUE)
 			{
-				sendCommandParams("play", currentListStartIndex, currentListSelectedIndex);		
+				gPlayerMode = PM_PLAYING;
+				sendCommandParams("play", gCurrentListStartIndex, gCurrentListSelectedIndex);		
 			}
 
 			if(processButtonPress(SWITCHBUTTON, SWITCHBUTTONPIN) == TRUE)
 			{
-				playerMode = PM_PLAYINGRADIO;
+				gPlayerMode = PM_PLAYING;
 				sendCommand("cmd:loadstreams\n");
 			}
 		}
 	}
 }
 
+// Send a command with 2 parameters through the serial port 
 void sendCommandParams(char* cmd, int param1, int param2)
 {
 	char stringBuffer[40];
@@ -240,15 +239,18 @@ void sendCommandParams(char* cmd, int param1, int param2)
 	sendCommand(stringBuffer);		
 }
 
+// Handle a button press. This returns TRUE when a new button press on the selected pin is detected 
+// Once a button press is detected, the function returns FALSE, until the button is released and 
+// pressed again
 BOOL processButtonPress(int buttonIndex, int buttonPin)
 {
 	BOOL result = FALSE;
 	
-	if(!(buttonPressSeen & (1 << buttonIndex)))
+	if(!(gButtonPressSeen & (1 << buttonIndex)))
 	{
 		if(!(buttonPin))
 		{
-			buttonPressSeen |=  (1 << buttonIndex);
+			gButtonPressSeen |=  (1 << buttonIndex);
 			result=TRUE;
 		}
 	}
@@ -256,7 +258,7 @@ BOOL processButtonPress(int buttonIndex, int buttonPin)
 	{
 		if((buttonPin))
 		{
-			buttonPressSeen &=  !(1 << buttonIndex);
+			gButtonPressSeen &=  !(1 << buttonIndex);
 		}
 		
 	}
@@ -264,24 +266,29 @@ BOOL processButtonPress(int buttonIndex, int buttonPin)
 	return result;
 }
 
+// Send a string to the router through the serial port
 void sendCommand(char* command)
 {
 	sprintf(serTXbuffer, command);	// Place command in send buffer
 	putstring(serTXbuffer);	// transmit over serial link		
 }
 
+// Main function. Apart from some initialization, this function contains
+// and endless loop which handles messages received from the router over 
+// the serial line
 int main(void)
 {
 	char artist[STR_LEN];	// Artist name
 	char title[STR_LEN];	// Title of current song
-	int playlistLength;				// Length of the playlist
-	int songNum;					// song number in the current playlist
-	int songTime;					// Total length of the song in seconds
-	int songElapsed;				// Elapsed time within the song in seconds
+	int playlistLength;		// Length of the playlist
+	int songNum;			// song number in the current playlist
+	int songTime;			// Total length of the song in seconds
+	int songElapsed;		// Elapsed time within the song in seconds
 	
     ioinit();		// Setup IO pins and defaults
     inituart();		// initialize AVR serial port (USART0)
 
+	// Blink once to indicate succesful startup
 	PORTC = 0b0100000;
 	_delay_ms(100);
 	PORTC = 0x00;   // All LED's are off
@@ -294,22 +301,26 @@ int main(void)
     lcd_puts("    MPD Boombox\n   Jeroen Bouwens\n Sponsored by Sioux\n  Embedded Systems");
     _delay_ms(2000);
 	
-	buttonPressSeen = 0;
-	playerMode = PM_PLAYINGRADIO;
+	// Initialize variables and the timer
+	gButtonPressSeen = 0;
+	gPlayerMode = PM_PLAYING;
 	init_timer1();
 	sei();		// enable interrupts
     
-    /* main program loop */    
-    for(;;) // loop forever
+    // Main program loop
+    for(;;) // Loop forever
 	{	
+		// Grab a line of data from the serial port
 		// Note: program execution will stall until serial data is received!
-		getline(serRXbuffer);		// grab a line of data from the serial port
+		getline(serRXbuffer);		
 
+		// Blink once when a message was received
 		PORTC |= 0b0100000;
 		_delay_ms(100);
 		PORTC &= 0b1011111;
-				
-		if(playerMode == PM_PLAYINGMP3 || playerMode == PM_PLAYINGRADIO)
+			
+		// If I am playing, show track info
+		if(gPlayerMode == PM_PLAYING)
 		{
 			processPlayingLine(serRXbuffer, artist, title, &playlistLength, &songNum, &songTime, &songElapsed);
 				
@@ -319,16 +330,17 @@ int main(void)
 			displayProgressBar(songTime, songElapsed);
 			displayTrackInfo(title, artist);
 		}
+		// If I am browsing 
 		else
 		{
-			if(processResponse(serRXbuffer, lines) == TRUE)
+			if(processResponse(serRXbuffer) == TRUE)
 			{
-				displayLines(lines);
+				displayDirEntries();
 			}
 		}
     }
 	 
-    return 0;   /* never reached */
+    return 0;   // Never reached
 }
 
 void inituart(void)	// Initialize USART0 to desired baud rate
@@ -402,7 +414,6 @@ void putstring(char *buffer)	// send a string to the UART
 	int bufpos = 0;
 	
 	cli();	// disable interrupts so we don't mangle the data
-	//uart_flush();	// clear RX buffer of stale chars if present
 	
 	// start sending characters over the serial port until we reach the end of the string
 	while ((bufpos < (SER_BUFF_LEN - 1)) && (buffer[bufpos] != '\0')) 
@@ -412,7 +423,6 @@ void putstring(char *buffer)	// send a string to the UART
 		bufpos++;
 	}
 	
-	//uart_putchar('\n');
 	sei();	// enable interrupts again
 	
 }
@@ -430,40 +440,60 @@ void init_timer1(void)
 	TIMSK1 |= (1 << TOIE1);
 }
 
-BOOL processResponse(char *RXserbuffer, char lines[4][STR_LEN])
+// Process a message in the response format
+BOOL processResponse(char *RXserbuffer)
 {
-	char *responsePtr		= strstr(RXserbuffer, "resp: ");
+	// The following code assumes the message has the following format:
+	//		resp: param1,param2,param3,param4
+	// It wil store the params in the gDirEntries array. Less than 4 params
+	// will also work
+	// NOTE: All params, including the last one, must be followed by a comma
 
+	// Check if this is a response message
+	char *responsePtr = strstr(RXserbuffer, "resp: ");
 	if(responsePtr)
 	{
-		char *respStart = responsePtr + sizeof("resp: ") - 1;
-		char *commaPtr = strstr(respStart, ",");
+		gNumDirEntries = 0;
+		char *respStart = responsePtr + sizeof("resp: ") - 1; // Skip the indentifier part
+		char *commaPtr = strstr(respStart, ","); 			   // Find the comma separating param1 and param2
+		
+		// Assume there are 4 parameters. If less than 4 are found, fill in blanks
 		for(int i=0; i<4; i++)
 		{
 			if(commaPtr)
 			{
-				int strLen = commaPtr - respStart;
-				strncpy(lines[i], respStart , strLen);
-				lines[i][strLen] = '\0';	
+				int strLen = commaPtr - respStart; 
+				strncpy(gDirEntries[i], respStart , strLen);
+				gDirEntries[i][strLen] = '\0';		// Make the string zero-terminated
 				respStart = commaPtr+1;
 				commaPtr = strstr(respStart, ",");
+				gNumDirEntries++; 					// Some administration
 			}
 			else
 			{
-				lines[i][0] = '\0';					
+				gDirEntries[i][0] = '\0';	
 			}
 		}		
-		waitingForReply = FALSE;
+		gWaitingForReply = FALSE;
 		return TRUE;
 	}
 	
 	return FALSE;
 }
 
-
+// Process a message in the track information format
 void processPlayingLine(char *RXserbuffer, char *artist, char *title, 
 						int *playlistLength, int *songNum, int *songTime, int *songElapsed)
 {
+	// The following code assumes the message has one of the following two formats:
+	//
+	// 	Artis: <artist> Title: <title> playlistlength: <playlistlength> song: <song> time: <time>
+	//
+	//  Title: <title> Name: <name> playlistlength: <playlistlength> song: <song> time: <time>
+	//
+	// Time is in the format <elapsedSeconds>:<totalDurationSeconds>
+	// The order of the fields DOES MATTER! 
+
 	char *artistPtr 	= strstr(RXserbuffer, "Artist: ");
 	char *titlePtr 		= strstr(RXserbuffer, "Title: ");
 	char *namePtr		= strstr(RXserbuffer, "Name: ");
@@ -485,12 +515,12 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 	stringLength = 0;
 	if(titlePtr && namePtr) // If we're playing a stream the "artist" field will not be present and there will be a "name" field between title and playlistlength
 	{
-		char *titleStart = titlePtr + sizeof("Title: ") - 1;
-		stringLength = namePtr - (titlePtr + sizeof("Title: ") - 1);
-		stringLength = stringLength > 20 ? 20 : stringLength;
-		strncpy(title, titleStart, stringLength);		
+		char *titleStart = titlePtr + sizeof("Title: ") - 1;			// Skip the field name
+		stringLength = namePtr - (titlePtr + sizeof("Title: ") - 1);	// Determine the length of the field value
+		stringLength = stringLength > 20 ? 20 : stringLength; 			// Truncate to the maximum width of the display
+		strncpy(title, titleStart, stringLength);						// Copy the field value to the appropriate buffer
 	}
-	else if(titlePtr && plLengthPtr) // There's no "name" field, so there will be a playlistlength field after the title
+	else if(titlePtr && plLengthPtr) // There's no "name" field, so we're playing an MP3 and there will be a playlistlength field after the title
 	{
 		char *titleStart = titlePtr + sizeof("Title: ") - 1;
 		stringLength = plLengthPtr - (titlePtr + sizeof("Title: ") - 1);
@@ -535,6 +565,7 @@ void processPlayingLine(char *RXserbuffer, char *artist, char *title,
 	}	
 }
 
+// Display the track name and artist, or the stream name and track name
 void displayTrackInfo(char *trackName, char *artistName)
 {
 
@@ -545,16 +576,22 @@ void displayTrackInfo(char *trackName, char *artistName)
 	lcd_puts(trackName);
 } 
 
+// Display the progress bar that indicates the percentage of a track that has 
+// elapsed. Note that this will have no function when playing a stream, since
+// this function needs to know how long a track lasts, which is unknown for a 
+// stream
 void displayProgressBar(int songLength, int songElapsed)
 {
 	if(songLength > 0)
 	{
+		// Elapsed part
 		for(int i=0; i<((songElapsed*100)/songLength)/5; i++)
 		{
 			lcd_gotoxy(i, 3);
 			lcd_putc('#');
 		}
-
+		
+		// Still remaining part
 		for(int i=((songElapsed*100)/songLength)/5; i<20; i++)
 		{
 			lcd_gotoxy(i, 3);
@@ -563,6 +600,7 @@ void displayProgressBar(int songLength, int songElapsed)
 	}
 	else
 	{
+		// Playing a stream, fill with '-'s
 		for(int i=0; i<20; i++)
 		{
 			lcd_gotoxy(i, 3);
@@ -571,6 +609,7 @@ void displayProgressBar(int songLength, int songElapsed)
 	}
 }
 
+// Display the track elapsed time, and the playlist info (position in playlist + playlist length)
 void displayTime(int songElapsed, int playlistLength, int songNum)
 {
 	char stringBuffer[20];
@@ -584,16 +623,18 @@ void displayTime(int songElapsed, int playlistLength, int songNum)
 	lcd_puts(stringBuffer);
 }
 
-void displayLines(char lines[4][STR_LEN])
+// Display the (at most) 4 directory entries received from the router, and indicate which
+// is the currently selected one.
+void displayDirEntries()
 {
 	lcd_clrscr();
 			
 	for(int y=0; y<4; y++)
 	{
 		lcd_gotoxy(1, y);
-		lcd_puts(lines[y]);
+		lcd_puts(gDirEntries[y]);
 		
-		if(y == currentListSelectedIndex)
+		if(y == gCurrentListSelectedIndex)
 		{
 			lcd_gotoxy(0, y);
 			lcd_puts(">");
