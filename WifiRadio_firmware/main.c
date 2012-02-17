@@ -42,12 +42,12 @@
 #define ENTERBUTTON 4
 #define SWITCHBUTTON 5
 
-#define UPBUTTONPIN PINB&1
-#define DOWNBUTTONPIN PINB&2
-#define LEFTBUTTONPIN PINB&4
-#define RIGHTBUTTONPIN PIND&128
+#define UPBUTTONPIN PINB&4
+#define DOWNBUTTONPIN PIND&128
+#define LEFTBUTTONPIN PINB&2
+#define RIGHTBUTTONPIN PIND&32
 #define ENTERBUTTONPIN PIND&64
-#define SWITCHBUTTONPIN PIND&32
+#define SWITCHBUTTONPIN PINB&1
 
 #define PM_PLAYING 0
 #define PM_BROWSING 2
@@ -604,7 +604,7 @@ void displayProgressBar(int songLength, int songElapsed)
 		for(int i=0; i<20; i++)
 		{
 			lcd_gotoxy(i, 3);
-			lcd_putc('-');
+			lcd_putc(' ');
 		}		
 	}
 }
