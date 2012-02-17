@@ -30,6 +30,18 @@ The firmware+perl script system has the following features:
 	* Browse and play from an MP3 collection located on a network share
 	* Show currently playing information, including progress in the current track, title/artist info and playlist info
 
+Usage
+-----
+
+The player is controlled using a 6-button keypad, with up/down/left/right/enter keys, and a mode switch key. The player starts in radio mode, 
+playing the predefined set of internet streams. Pressing the mode switch key will start the MP3 browser mode, and shows the first few MP3 directories 
+(in my case, artists). The browser is fully file based, so ID3 tags inside the MP3's are not interpreted. Use up/down to move through the list, press 
+"right" to enter a directory, and show what's inside. Press "left" to go up one directory level. Press "enter" to play the currently selected item. If
+this is a directory, everything inside that directory and its subdirectories will be played. Pressing the mode switch button again will reload and play
+the predefined internet streams once more.
+
+While playing, left/right let you move through the playlist, while up/down controls the volume (not shown on the display).
+	
 Technical details
 -----------------
 	
