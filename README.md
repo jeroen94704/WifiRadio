@@ -17,18 +17,18 @@ Contents
 
 The repository contains the following:
 
-	* C-code, to be compiled and programmed onto a suitable AVR microcontroller
-	* A perl script, which runs on the router
-	* Eagle schematics and board files of the electronics
+* C-code, to be compiled and programmed onto a suitable AVR microcontroller
+* A perl script, which runs on the router
+* Eagle schematics and board files of the electronics
 
 Features
 --------
 
 The firmware+perl script system has the following features:
 
-	* Load a predefined playlist containing a set of internet streams
-	* Browse and play from an MP3 collection located on a network share
-	* Show currently playing information, including progress in the current track, title/artist info and playlist info
+* Load a predefined playlist containing a set of internet streams
+* Browse and play from an MP3 collection located on a network share
+* Show currently playing information, including progress in the current track, title/artist info and playlist info
 
 Usage
 -----
