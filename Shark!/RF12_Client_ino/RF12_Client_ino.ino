@@ -50,6 +50,25 @@ static word msgs_rcvd;      // total number of lines received modulo 10,000
 
 byte Ethernet::buffer[1000];   // tcp/ip send and receive buffer
 
+MilliTimer sendTimer;
+char payload[] = "CMDD04XXX";
+byte needToSend;
+
+int rxLed = 5;
+int txLed = 6;
+bool invertLed = true;
+int intensity = 0;
+
+void sendLed(bool on)
+{
+  digitalWrite(txLed, (invertLed ? on : !on) ? LOW : HIGH);  
+}
+
+void recvLed(bool on)
+{
+  digitalWrite(rxLed, (invertLed ? on : !on) ? LOW : HIGH);  
+}
+
 static void loadConfig() {
     for (byte i = 0; i < sizeof config; ++i)
         ((byte*) &config)[i] = eeprom_read_byte(CONFIG_EEPROM_ADDR + i);
@@ -88,7 +107,7 @@ void setup(){
     
     if (ether.begin(sizeof Ethernet::buffer, mymac) == 0) 
       Serial.println( "Failed to access Ethernet controller");
-    if (!ether.dhcpSetup("Nanode"))
+//    if (!ether.dhcpSetup("Nanode"))
     {
       Serial.println("DHCP failed. Falling back to static");
       ether.staticSetup(myip, gwip);
@@ -97,6 +116,11 @@ void setup(){
 #if SERIAL
     ether.printIp("IP: ", ether.myip);
 #endif
+
+    pinMode(5, OUTPUT);
+    pinMode(6, OUTPUT);
+    
+    
 }
 
 char okHeader[] PROGMEM = 
@@ -279,8 +303,24 @@ void loop(){
     }
     
     // send a data packet out if requested
-    if (outCount >= 0 && rf12_canSend()) {
+    if (outCount >= 0 && rf12_canSend()) 
+    {
         rf12_sendStart(outDest, outBuf, outCount, 1);
         outCount = -1;
     }
+    
+    if (sendTimer.poll(100))
+    {
+        needToSend = 1;
+    }
+
+    if (needToSend && rf12_canSend()) 
+    {
+        needToSend = 0;
+        
+        sprintf(payload, "CMDD06%03d\0", intensity);
+        rf12_sendStart(0, payload, sizeof payload);
+        Serial.println("Send started");
+        intensity = (intensity+1) % 255;
+    }    
 }

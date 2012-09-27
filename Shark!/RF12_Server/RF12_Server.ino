@@ -21,7 +21,7 @@
 //
 // Where:
 //   * CMD : Command. Accepted values are "DWR" (Digital write) or "AWR" (Analog write, i.e. PWM)
-//   * ### : Pin ID. Can be D0..D13 Digital 0-13. 
+//   * ### : Pin ID. Can be D00..D13 Digital 0-13. 
 //   * XXX : Value. For PWM pins, this can be any value from 000-255. For digital output pins, this is either 000 or 255.
 //
 // Note: Only pins 3, 5, 6, 9, 10, and 11 support analog write (PWM). 
@@ -56,17 +56,63 @@ boolean digitalInput[] =
 boolean analogInput[] = { true, true, false, false, false, false };
 
 char txBuff[6];
+int activityLED = 6;
+bool ledState;
+
+MilliTimer sendTimer;
+byte needToSend;
 
 void setup ()
 {
   Serial.begin(57600);
   Serial.println("Winode RF12 Server");
   rf12_initialize(nodeID, RF12_868MHZ, 33);
+  pinMode(activityLED, OUTPUT);     
+  ledState = false;
+  digitalWrite(activityLED, HIGH);  
 }
 
 boolean parsePayload(volatile uint8_t* data, int len)
 {
+  if(strncmp((const char *)data, "CMDD", 4) == 0)
+  {
+    char pinID[3];
+    strncpy(pinID, (const char*)data+4, 2);      
+    pinID[2] = '\0';
+    
+    char value[4];
+    strncpy(value, (const char*)data+6, 3);      
+    value[3] = '\0';
+    
+    int pinNr = atoi(pinID);
+    switch(pinNr)
+    {
+      case 0:
+      case 1:
+      case 2:
+      case 4:
+      case 7:
+      case 8:
+      case 12:
+      case 13:
+        digitalWrite(pinNr, (atoi(value) == 0) ? LOW : HIGH);
+      break;  
 
+      case 3:
+      case 5:
+      case 6:
+      case 9:
+      case 10:
+      case 11:
+        analogWrite(pinNr, atoi(value));
+      break;
+    }
+    Serial.println("parsed: ");
+  }
+  else
+  {
+    Serial.println("couldn't parse");
+  }
 }
 
 void broadcastInputValues()
@@ -115,13 +161,20 @@ void loop ()
 {
   if (rf12_recvDone() && rf12_crc == 0) 
   {
-    Serial.print("Received");
+    Serial.println("Received");
     parsePayload(rf12_data, rf12_len);
   }
 
-  broadcastInputValues();
-  
-  delay(100);
+    if (sendTimer.poll(100))
+    {
+        needToSend = 1;
+    }
+
+    if (needToSend && rf12_canSend()) 
+    {
+        needToSend = 0;        
+        broadcastInputValues(); 
+    }      
 }
 
 
